@@ -1,0 +1,100 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+node_modules/
+dist/
+coverage/
+
+# Go build output
+/bin/
+/build/
+/dist/
+
+# Go workspace
+go.work
+go.work.sum
+
+# Coverage
+coverage.out
+coverage.html
+*.coverprofile
+
+# Environment / Secrets
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# Local secrets / credentials
+*.pem
+*.key
+*.crt
+
+/backend/.agents/
+/backend/README.md
+.vscode/
+*.code-workspace
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+Desktop.ini
+
+# Linux
+.directory
+
+*.log
+logs/
+
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Local Docker volumes
+docker-data/
+docker-volumes/
+
+# Docker override files
+docker-compose.override.yml
+docker-compose.local.yml
+
+# Local database dumps
+*.sql.gz
+*.dump
+*.backup
+
+# PostgreSQL local data
+postgres-data/
+pgdata/
+redis-data/
+rabbitmq-data/
+
+*.generated.go
+
+/docs/swagger/
+swagger.json
+swagger.yaml
+
+test-results/
+test-output/
