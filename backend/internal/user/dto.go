@@ -8,6 +8,9 @@ type UpdateProfileRequest struct {
 	AvatarURL   string `json:"avatar_url" binding:"omitempty,url"`
 }
 
+type UpdateRoleRequest struct {
+	Role string `json:"role" binding:"required,oneof=student admin"`
+}
 // PublicResponse is the safe-to-expose shape of a user, used everywhere
 // except internal auth flows.
 type PublicResponse struct {

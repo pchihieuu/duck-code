@@ -19,6 +19,11 @@ type Repository interface {
 	FindByEmail(ctx context.Context, email string) (*User, error)
 	FindByUsername(ctx context.Context, username string) (*User, error)
 	UpdateProfile(ctx context.Context, id uuid.UUID, displayName, avatarURL string) error
+	// UpdateRole is admin-only in practice (enforced by middleware.RequireRole
+	// at the handler layer, not here) — the repository just persists it.
+	UpdateRole(ctx context.Context, id uuid.UUID, role string) error
+	// List supports the admin user list (Phase 6), simple offset pagination.
+	List(ctx context.Context, limit, offset int) ([]User, int64, error)
 }
 
 type repository struct {
@@ -57,6 +62,27 @@ func (r *repository) UpdateProfile(ctx context.Context, id uuid.UUID, displayNam
 		return nil
 	}
 	return r.db.WithContext(ctx).Model(&User{}).Where("id = ?", id).Updates(updates).Error
+}
+
+func (r *repository) UpdateRole(ctx context.Context, id uuid.UUID, role string) error {
+	return r.db.WithContext(ctx).Model(&User{}).Where("id = ?", id).Update("role", role).Error
+}
+
+func (r *repository) List(ctx context.Context, limit, offset int) ([]User, int64, error) {
+	var users []User
+	var total int64
+
+	if err := r.db.WithContext(ctx).Model(&User{}).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if err := r.db.WithContext(ctx).
+		Order("created_at DESC").
+		Limit(limit).
+		Offset(offset).
+		Find(&users).Error; err != nil {
+		return nil, 0, err
+	}
+	return users, total, nil
 }
 
 func (r *repository) findOne(ctx context.Context, cond string, args ...interface{}) (*User, error) {

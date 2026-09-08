@@ -3,10 +3,17 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile.api
+    profiles: ["app"] # only starts with --profile app; default `docker compose up` skips it
     ports:
       - "8080:8080"
     env_file:
       - ../../.env
+    environment:
+      # Override the host-oriented defaults from .env with the internal
+      # Docker network hostnames — this container talks to sibling
+      # containers by service name, not localhost.
+      DB_URL: postgres://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}?sslmode=disable
+      REDIS_HOST: redis
     depends_on:
       postgres:
         condition: service_healthy
@@ -18,8 +25,12 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile.worker
+    profiles: ["app"] # only starts with --profile app; default `docker compose up` skips it
     env_file:
       - ../../.env
+    environment:
+      DB_URL: postgres://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}?sslmode=disable
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
     depends_on:
       postgres:
         condition: service_healthy
