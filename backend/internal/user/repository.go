@@ -3,6 +3,7 @@ package user
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -24,6 +25,14 @@ type Repository interface {
 	UpdateRole(ctx context.Context, id uuid.UUID, role string) error
 	// List supports the admin user list (Phase 6), simple offset pagination.
 	List(ctx context.Context, limit, offset int) ([]User, int64, error)
+
+	// AddXP cộng dồn XP bằng UPDATE atomically (total_xp = total_xp + amount),
+	// KHÔNG phải read-modify-write, để tránh race condition khi 2 request
+	// cộng XP cho cùng 1 user gần như đồng thời (Phase 2 gamification).
+	AddXP(ctx context.Context, userID uuid.UUID, amount int) error
+	// UpdateStreak ghi đè current/longest streak + last_activity_date sau khi
+	// gamification.Service đã tính xong thuật toán streak (BR-052).
+	UpdateStreak(ctx context.Context, userID uuid.UUID, current, longest int, lastActivityDate time.Time) error
 }
 
 type repository struct {
@@ -83,6 +92,29 @@ func (r *repository) List(ctx context.Context, limit, offset int) ([]User, int64
 		return nil, 0, err
 	}
 	return users, total, nil
+}
+
+// AddXP dùng gorm.Expr để sinh ra "total_xp = total_xp + ?" ở tầng SQL,
+// tránh việc phải SELECT rồi UPDATE lại (race condition khi nhiều request
+// cộng XP song song cho cùng 1 user, ví dụ hoàn thành lesson + exercise gần
+// như cùng lúc).
+func (r *repository) AddXP(ctx context.Context, userID uuid.UUID, amount int) error {
+	return r.db.WithContext(ctx).
+		Model(&User{}).
+		Where("id = ?", userID).
+		Update("total_xp", gorm.Expr("total_xp + ?", amount)).
+		Error
+}
+
+func (r *repository) UpdateStreak(ctx context.Context, userID uuid.UUID, current, longest int, lastActivityDate time.Time) error {
+	return r.db.WithContext(ctx).
+		Model(&User{}).
+		Where("id = ?", userID).
+		Updates(map[string]interface{}{
+			"current_streak":      current,
+			"longest_streak":      longest,
+			"last_activity_date":  lastActivityDate,
+		}).Error
 }
 
 func (r *repository) findOne(ctx context.Context, cond string, args ...interface{}) (*User, error) {

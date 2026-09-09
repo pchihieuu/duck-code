@@ -16,6 +16,14 @@ type User struct {
 	DisplayName  string         `gorm:"not null" json:"display_name"`
 	AvatarURL    *string        `json:"avatar_url,omitempty"`
 	Role         string         `gorm:"not null;default:student" json:"role"`
+
+	// Gamification (Phase 2, migration 000007) — 1-1 với user, đọc thường
+	// xuyên (header), giữ thẳng trong bảng users thay vì tách bảng riêng.
+	TotalXP          int        `gorm:"not null;default:0" json:"total_xp"`
+	CurrentStreak    int        `gorm:"not null;default:0" json:"current_streak"`
+	LongestStreak    int        `gorm:"not null;default:0" json:"longest_streak"`
+	LastActivityDate *time.Time `gorm:"type:date" json:"last_activity_date,omitempty"`
+
 	CreatedAt    time.Time      `json:"created_at"`
 	UpdatedAt    time.Time      `json:"updated_at"`
 	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
