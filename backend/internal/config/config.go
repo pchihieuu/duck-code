@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -22,10 +23,29 @@ type Config struct {
 
 	RabbitMQURL string
 
-	JWTAccessSecret     string
-	JWTRefreshSecret    string
-	JWTAccessTTLMin     int
-	JWTRefreshTTLHours  int
+	JWTAccessSecret    string
+	JWTRefreshSecret   string
+	JWTAccessTTLMin    int
+	JWTRefreshTTLHours int
+
+	// AllowedOrigins is the CORS whitelist. Required (non-"*") once the
+	// refresh token moved to an HttpOnly cookie — browsers refuse
+	// "Access-Control-Allow-Origin: *" together with credentialed
+	// (cookie-carrying) requests, so this MUST be an explicit origin list,
+	// never a wildcard. See internal/middleware/cors.go.
+	AllowedOrigins []string
+
+	// Cookie attributes for the refresh_token cookie
+	// (internal/auth/cookie.go). Defaults below are safe for local HTTP
+	// dev (same registrable domain, different port — e.g.
+	// localhost:3000 -> localhost:8080 — which is "same-site" for
+	// SameSite purposes even though it's cross-origin). In production,
+	// with FE/BE on different domains, set COOKIE_SECURE=true and
+	// COOKIE_SAMESITE=None (SameSite=None requires Secure=true or
+	// browsers drop the cookie).
+	CookieDomain   string
+	CookieSecure   bool
+	CookieSameSite string
 }
 
 // Load reads .env (if present) then environment variables into a Config.
@@ -52,6 +72,12 @@ func Load() *Config {
 		JWTRefreshSecret:   getEnv("JWT_REFRESH_SECRET", ""),
 		JWTAccessTTLMin:    getEnvInt("JWT_ACCESS_TTL_MIN", 15),
 		JWTRefreshTTLHours: getEnvInt("JWT_REFRESH_TTL_HOURS", 168),
+
+		AllowedOrigins: getEnvList("ALLOWED_ORIGINS", []string{"http://localhost:3000"}),
+
+		CookieDomain:   getEnv("COOKIE_DOMAIN", ""),
+		CookieSecure:   getEnvBool("COOKIE_SECURE", false),
+		CookieSameSite: getEnv("COOKIE_SAMESITE", "Lax"),
 	}
 
 	if cfg.DBURL == "" {
@@ -59,6 +85,9 @@ func Load() *Config {
 	}
 	if cfg.JWTAccessSecret == "" || cfg.JWTRefreshSecret == "" {
 		log.Fatal("JWT_ACCESS_SECRET and JWT_REFRESH_SECRET are required")
+	}
+	if cfg.JWTAccessSecret == cfg.JWTRefreshSecret {
+		log.Fatal("JWT_ACCESS_SECRET and JWT_REFRESH_SECRET must be different values")
 	}
 
 	return cfg
@@ -81,4 +110,36 @@ func getEnvInt(key string, fallback int) int {
 		return fallback
 	}
 	return i
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return fallback
+	}
+	return b
+}
+
+// getEnvList parses a comma-separated env var into a trimmed string slice.
+func getEnvList(key string, fallback []string) []string {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return fallback
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return fallback
+	}
+	return out
 }

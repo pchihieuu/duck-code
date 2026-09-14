@@ -63,6 +63,8 @@ func (s *service) Register(ctx context.Context, req RegisterRequest) (*user.User
 	return u, nil
 }
 
+// Login always returns the SAME error for "email doesn't exist" and "wrong
+// password" (BR-003, docs/PLANNING.md §7.1) — never leak which one it was.
 func (s *service) Login(ctx context.Context, req LoginRequest) (*user.User, TokenPair, error) {
 	u, err := s.users.FindByEmail(ctx, req.Email)
 	if err != nil {
@@ -87,29 +89,38 @@ func (s *service) Login(ctx context.Context, req LoginRequest) (*user.User, Toke
 	return u, pair, nil
 }
 
+// Refresh implements rotate-on-use: the presented refresh token is atomically
+// revoked (Repository.TryRevoke, a single Redis SETNX round-trip) before a
+// new pair is issued. If TryRevoke reports the token was ALREADY revoked —
+// either a genuine reuse attempt, or a second concurrent /auth/refresh call
+// racing the first with the same token — this request is rejected outright
+// rather than also issuing a token pair. That closes the
+// check-then-set race a naive IsRevoked()-then-RevokeToken() sequence would
+// have (two concurrent requests could both see "not revoked" and both
+// successfully rotate, doubling the number of valid sessions from one
+// stolen token).
 func (s *service) Refresh(ctx context.Context, refreshToken string) (TokenPair, error) {
-	claims, err := jwtutil.ParseToken(refreshToken, s.cfg.JWTRefreshSecret)
+	claims, err := jwtutil.ParseToken(refreshToken, s.cfg.JWTRefreshSecret, jwtutil.TokenTypeRefresh)
 	if err != nil {
 		return TokenPair{}, apperrors.Unauthorized("invalid or expired refresh token")
 	}
 
-	revoked, err := s.repo.IsRevoked(ctx, refreshToken)
-	if err != nil {
-		return TokenPair{}, apperrors.Internal(err)
-	}
-	if revoked {
-		return TokenPair{}, apperrors.Unauthorized("refresh token revoked")
-	}
-
 	u, err := s.users.FindByID(ctx, claims.UserID)
 	if err != nil {
+		// Covers both "user truly gone" and "soft-deleted" — GORM's
+		// DeletedAt scoping already excludes soft-deleted rows from
+		// FindByID, so this one check is sufficient (docs/PLANNING.md §15).
 		return TokenPair{}, apperrors.Unauthorized("user no longer exists")
 	}
 
-	// Rotate: invalidate the old refresh token, issue a fresh pair.
 	refreshTTL := time.Duration(s.cfg.JWTRefreshTTLHours) * time.Hour
-	if err := s.repo.RevokeToken(ctx, refreshToken, refreshTTL); err != nil {
+	alreadyRevoked, err := s.repo.TryRevoke(ctx, refreshToken, refreshTTL)
+	if err != nil {
+		// Fail closed: a Redis error must NOT silently allow the refresh.
 		return TokenPair{}, apperrors.Internal(err)
+	}
+	if alreadyRevoked {
+		return TokenPair{}, apperrors.Unauthorized("refresh token already used or revoked")
 	}
 
 	pair, err := s.issueTokenPair(u)
@@ -119,6 +130,9 @@ func (s *service) Refresh(ctx context.Context, refreshToken string) (TokenPair, 
 	return pair, nil
 }
 
+// Logout is intentionally idempotent — calling it twice (or with an
+// already-revoked token) must still return success, since the goal state
+// ("this token is revoked") is already achieved either way.
 func (s *service) Logout(ctx context.Context, refreshToken string) error {
 	refreshTTL := time.Duration(s.cfg.JWTRefreshTTLHours) * time.Hour
 	if err := s.repo.RevokeToken(ctx, refreshToken, refreshTTL); err != nil {
@@ -131,11 +145,11 @@ func (s *service) issueTokenPair(u *user.User) (TokenPair, error) {
 	accessTTL := time.Duration(s.cfg.JWTAccessTTLMin) * time.Minute
 	refreshTTL := time.Duration(s.cfg.JWTRefreshTTLHours) * time.Hour
 
-	access, err := jwtutil.GenerateToken(u.ID, u.Role, s.cfg.JWTAccessSecret, accessTTL)
+	access, err := jwtutil.GenerateToken(u.ID, u.Role, jwtutil.TokenTypeAccess, s.cfg.JWTAccessSecret, accessTTL)
 	if err != nil {
 		return TokenPair{}, err
 	}
-	refresh, err := jwtutil.GenerateToken(u.ID, u.Role, s.cfg.JWTRefreshSecret, refreshTTL)
+	refresh, err := jwtutil.GenerateToken(u.ID, u.Role, jwtutil.TokenTypeRefresh, s.cfg.JWTRefreshSecret, refreshTTL)
 	if err != nil {
 		return TokenPair{}, err
 	}

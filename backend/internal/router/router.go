@@ -28,7 +28,7 @@ func New(db *gorm.DB, rdb *redis.Client, cfg *config.Config) *gin.Engine {
 	}
 
 	r := gin.New()
-	r.Use(middleware.Recover(), middleware.Logger(), middleware.CORS())
+	r.Use(middleware.Recover(), middleware.Logger(), middleware.CORS(cfg.AllowedOrigins))
 
 	r.GET("/health", func(c *gin.Context) {
 		response.OK(c, http.StatusOK, gin.H{"status": "ok"})
@@ -40,7 +40,7 @@ func New(db *gorm.DB, rdb *redis.Client, cfg *config.Config) *gin.Engine {
 	userRepo := user.NewRepository(db)
 	authRepo := auth.NewRepository(rdb)
 	authSvc := auth.NewService(userRepo, authRepo, cfg)
-	authHandler := auth.NewHandler(authSvc)
+	authHandler := auth.NewHandler(authSvc, cfg)
 
 	authGroup := v1.Group("")
 	authGroup.Use(middleware.RateLimit(rdb, 10, time.Minute)) // 10 req/min per IP per route

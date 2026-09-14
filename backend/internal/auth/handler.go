@@ -2,9 +2,11 @@ package auth
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"backend/internal/config"
 	"backend/internal/user"
 	apperrors "backend/pkg/errors"
 	"backend/pkg/response"
@@ -12,10 +14,11 @@ import (
 
 type Handler struct {
 	svc Service
+	cfg *config.Config
 }
 
-func NewHandler(svc Service) *Handler {
-	return &Handler{svc: svc}
+func NewHandler(svc Service, cfg *config.Config) *Handler {
+	return &Handler{svc: svc, cfg: cfg}
 }
 
 // RegisterRoutes mounts the public /auth endpoints (no auth middleware).
@@ -54,39 +57,53 @@ func (h *Handler) login(c *gin.Context) {
 		writeErr(c, err)
 		return
 	}
+
+	setRefreshCookie(c, h.cfg, tokens.RefreshToken, refreshMaxAgeSeconds(h.cfg))
 	response.OK(c, http.StatusOK, gin.H{
 		"user":   user.ToPublicResponse(u),
-		"tokens": tokens,
+		"tokens": ToAccessTokenResponse(tokens), // refresh_token NEVER in the body — cookie only
 	})
 }
 
+// refresh reads the refresh token from the HttpOnly cookie ONLY — there is
+// no JSON body anymore (checklist item: "Không còn yêu cầu {refreshToken}
+// cho /auth/refresh"). A missing or empty cookie is rejected before the
+// service is even called.
 func (h *Handler) refresh(c *gin.Context) {
-	var req RefreshRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Err(c, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+	token, err := c.Cookie(refreshCookieName)
+	if err != nil || token == "" {
+		response.Err(c, http.StatusUnauthorized, "UNAUTHORIZED", "missing refresh token cookie")
 		return
 	}
 
-	tokens, err := h.svc.Refresh(c.Request.Context(), req.RefreshToken)
+	tokens, err := h.svc.Refresh(c.Request.Context(), token)
 	if err != nil {
 		writeErr(c, err)
 		return
 	}
-	response.OK(c, http.StatusOK, tokens)
+
+	setRefreshCookie(c, h.cfg, tokens.RefreshToken, refreshMaxAgeSeconds(h.cfg))
+	response.OK(c, http.StatusOK, ToAccessTokenResponse(tokens))
 }
 
+// logout is idempotent at the HTTP layer too: a missing cookie is treated
+// as "already logged out" (200), not an error — the goal state is already
+// achieved. The cookie is always cleared regardless.
 func (h *Handler) logout(c *gin.Context) {
-	var req RefreshRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Err(c, http.StatusBadRequest, "BAD_REQUEST", err.Error())
-		return
+	token, err := c.Cookie(refreshCookieName)
+	if err == nil && token != "" {
+		if err := h.svc.Logout(c.Request.Context(), token); err != nil {
+			writeErr(c, err)
+			return
+		}
 	}
 
-	if err := h.svc.Logout(c.Request.Context(), req.RefreshToken); err != nil {
-		writeErr(c, err)
-		return
-	}
+	clearRefreshCookie(c, h.cfg)
 	response.OK(c, http.StatusOK, gin.H{"message": "logged out"})
+}
+
+func refreshMaxAgeSeconds(cfg *config.Config) int {
+	return cfg.JWTRefreshTTLHours * int(time.Hour.Seconds())
 }
 
 func writeErr(c *gin.Context, err error) {
